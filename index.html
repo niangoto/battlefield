@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Battlefield</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <h1>Battlefield</h1>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <div id="setup-panel">
+            <h2>Настройки на играта</h2>
+            <div>
+                <label for="unitCount">Брой отряди за всеки играч:</label>
+                <input type="number" id="unitCount" value="5" min="1" max="20">
+            </div>
+            <div>
+                <label for="unitValue">Начална стойност на всеки отряд:</label>
+                <input type="number" id="unitValue" value="100" min="20" max="500">
+            </div>
+            <button id="startGameBtn">Започни играта</button>
+        </div>
+
+        <div id="game-panel" style="display: none;">
+             <p id="info-panel">Информация за текущия ход</p>
+             <button id="actionButton">Готово</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
