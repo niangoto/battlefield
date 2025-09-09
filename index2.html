@@ -15,270 +15,550 @@
       align-items: center;
     }
     h1 { margin: 10px; }
-    #controls { margin-bottom: 10px; }
+    #controls { 
+      margin-bottom: 10px; 
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+    }
+    #setupPanel {
+      background: #2b2b2b;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .player-setup {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      margin-bottom: 10px;
+    }
     #gameCanvas {
       border: 2px solid #eee;
       background: #111;
       cursor: pointer;
     }
+    .info-panel {
+      margin-top: 10px;
+      padding: 10px;
+      background: #2b2b2b;
+      border-radius: 5px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
   <h1>Lanchester Duel</h1>
+  
+  <div id="setupPanel">
+    <div class="player-setup">
+      <h3>Настройки за играч 1 (сини)</h3>
+      <label>
+        Брой отряди:
+        <input type="number" id="player1Units" min="1" max="10" value="3">
+      </label>
+      <label>
+        Начална стойност:
+        <input type="number" id="player1Value" min="100" max="1000" step="100" value="100">
+      </label>
+    </div>
+    
+    <div class="player-setup">
+      <h3>Настройки за играч 2 (червени)</h3>
+      <label>
+        Брой отряди:
+        <input type="number" id="player2Units" min="1" max="10" value="3">
+      </label>
+      <label>
+        Начална стойност:
+        <input type="number" id="player2Value" min="100" max="1000" step="100" value="100">
+      </label>
+    </div>
+    
+    <button id="startBtn">Започни игра</button>
+  </div>
+  
   <div id="controls">
     <button id="readyBtn">Готово</button>
+    <button id="resetBtn">Нова игра</button>
   </div>
+  
   <canvas id="gameCanvas" width="1000" height="600"></canvas>
+  
+  <div class="info-panel" id="gameInfo">
+    Фаза: Разполагане | Играч 1 (сини) разполага отряди
+  </div>
 
   <script>
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
+    const gameInfo = document.getElementById("gameInfo");
 
     const MAX_MOVE = 120;
     const MIN_FRACTION = 1/20;
     const UNIT_BASE = 100;
     const UNIT_SIZE = 30;
+    const MIN_DISTANCE = 50; // Минимално разстояние между отряди при разполагане
+    const BATTLE_SPEED = 0.5; // Скорост на битката (0-1)
+    const RETREAT_DAMAGE_FACTOR = 0.2; // Фактор на щетите при отстъпление
 
-    let gamePhase = "placement";
+    let gamePhase = "setup";
     let currentPlayer = 1;
     let units = [];
     let selectedUnit = null;
-    let initialValue = UNIT_BASE;
+    let player1Units = 3;
+    let player1Value = 100;
+    let player2Units = 3;
+    let player2Value = 100;
+    let unitsToPlace = 0;
+    let battleAnimation = null;
 
-    document.getElementById("readyBtn").addEventListener("click", () => {
+    // Инициализация на UI елементи
+    document.getElementById("startBtn").addEventListener("click", startGame);
+    document.getElementById("readyBtn").addEventListener("click", handleReady);
+    document.getElementById("resetBtn").addEventListener("click", resetGame);
+
+    function startGame() {
+      player1Units = parseInt(document.getElementById("player1Units").value);
+      player1Value = parseInt(document.getElementById("player1Value").value);
+      player2Units = parseInt(document.getElementById("player2Units").value);
+      player2Value = parseInt(document.getElementById("player2Value").value);
+      
+      gamePhase = "placement";
+      currentPlayer = 1;
+      unitsToPlace = currentPlayer === 1 ? player1Units : player2Units;
+      
+      document.getElementById("setupPanel").style.display = "none";
+      updateGameInfo();
+      draw();
+    }
+
+    function resetGame() {
+      gamePhase = "setup";
+      units = [];
+      currentPlayer = 1;
+      selectedUnit = null;
+      
+      if (battleAnimation) {
+        clearInterval(battleAnimation);
+        battleAnimation = null;
+      }
+      
+      document.getElementById("setupPanel").style.display = "flex";
+      updateGameInfo();
+      draw();
+    }
+
+    function handleReady() {
       if (gamePhase === "placement") {
+        // Проверка дали всички отряди са разположени
+        const playerUnits = units.filter(u => u.player === currentPlayer);
+        const expectedUnits = currentPlayer === 1 ? player1Units : player2Units;
+        
+        if (playerUnits.length < expectedUnits) {
+          alert(`Играч ${currentPlayer} трябва да разположи всички отряди преди да продължи!`);
+          return;
+        }
+        
         currentPlayer = currentPlayer === 1 ? 2 : 1;
-        if (units.some(u=>u.player===1) && units.some(u=>u.player===2)) {
+        unitsToPlace = currentPlayer === 1 ? player1Units : player2Units;
+        
+        if (currentPlayer === 1) {
+          // Ако се връщаме към играч 1, значи играч 2 е готов
           gamePhase = "movementSetup";
           currentPlayer = 1;
         }
+        
       } else if (gamePhase === "movementSetup") {
         currentPlayer = currentPlayer === 1 ? 2 : 1;
-        if (units.every(u=>u.orderGiven)) {
+        
+        if (currentPlayer === 1) {
+          // Ако се връщаме към играч 1, значи играч 2 е готов
           gamePhase = "battle";
           animateBattle();
         }
       } else if (gamePhase === "battle") {
-        for (let u of units) { u.target=null; u.orderGiven=false; }
+        for (let u of units) { 
+          u.target = null; 
+          u.orderGiven = false; 
+          u.damage = 0;
+          delete u.targetValue;
+        }
         gamePhase = "movementSetup";
         currentPlayer = 1;
       }
+      
+      updateGameInfo();
       draw();
-    });
+    }
+
+    function updateGameInfo() {
+      let infoText = "";
+      
+      switch(gamePhase) {
+        case "setup":
+          infoText = "Настройте играта и натиснете 'Започни игра'";
+          break;
+        case "placement":
+          infoText = `Фаза: Разполагане | Играч ${currentPlayer} (${currentPlayer === 1 ? "сини" : "червени"}) разполага отряди | Оставащи: ${unitsToPlace}`;
+          break;
+        case "movementSetup":
+          infoText = `Фаза: Задаване на движения | Играч ${currentPlayer} (${currentPlayer === 1 ? "сини" : "червени"}) задава посоки`;
+          // Показваме колко отряда имат зададени команди
+          const playerUnits = units.filter(u => u.player === currentPlayer);
+          const unitsWithOrders = playerUnits.filter(u => u.orderGiven).length;
+          infoText += ` | Зададени команди: ${unitsWithOrders}/${playerUnits.length}`;
+          break;
+        case "battle":
+          infoText = "Фаза: Битка | Изпълнява се битката";
+          break;
+      }
+      
+      gameInfo.textContent = infoText;
+    }
 
     canvas.addEventListener("click", (e) => {
-      const {x,y} = getMouse(e);
+      const {x, y} = getMouse(e);
+      
       if (gamePhase === "placement") {
-        addUnit(x,y,currentPlayer,initialValue);
-        currentPlayer = currentPlayer===1?2:1;
+        // Проверка дали позицията е в съответната половина на полето
+        const inPlayerHalf = (currentPlayer === 1 && x < canvas.width/2) || 
+                            (currentPlayer === 2 && x > canvas.width/2);
+        
+        if (!inPlayerHalf) {
+          alert("Можете да разполагате отряди само във вашата половина на полето!");
+          return;
+        }
+        
+        // Проверка за минимално разстояние между отряди
+        let tooClose = false;
+        for (const unit of units) {
+          if (unit.player === currentPlayer && distance({x, y}, unit) < MIN_DISTANCE) {
+            tooClose = true;
+            break;
+          }
+        }
+        
+        if (tooClose) {
+          alert("Отрядите трябва да са на поне 50 пиксела разстояние един от друг!");
+          return;
+        }
+        
+        const unitValue = currentPlayer === 1 ? player1Value : player2Value;
+        addUnit(x, y, currentPlayer, unitValue);
+        unitsToPlace--;
+        
+        if (unitsToPlace <= 0) {
+          // Автоматично преминаване към следващия играч
+          handleReady();
+        }
       } else if (gamePhase === "movementSetup") {
-        const clicked = getUnitAt(x,y);
-        if (clicked && clicked.player===currentPlayer) {
+        const clicked = getUnitAt(x, y);
+        if (clicked && clicked.player === currentPlayer) {
           selectedUnit = clicked;
         } else if (selectedUnit) {
           const dx = x - selectedUnit.x;
           const dy = y - selectedUnit.y;
           const dist = Math.sqrt(dx*dx+dy*dy);
-          const scale = dist>MAX_MOVE ? MAX_MOVE/dist : 1;
+          const scale = dist > MAX_MOVE ? MAX_MOVE/dist : 1;
           selectedUnit.target = {
             x: selectedUnit.x + dx*scale,
             y: selectedUnit.y + dy*scale,
             dx: dx*scale,
             dy: dy*scale,
-            angle: Math.atan2(dy,dx)
+            angle: Math.atan2(dy, dx),
+            distance: Math.min(dist, MAX_MOVE),
+            progress: 0
           };
           selectedUnit.orderGiven = true;
           selectedUnit = null;
         }
       }
+      
+      updateGameInfo();
       draw();
     });
 
-    canvas.addEventListener("dblclick",(e)=>{
-      const {x,y} = getMouse(e);
-      const u = getUnitAt(x,y);
-      if (u && u.value>=2*UNIT_BASE*MIN_FRACTION) {
-        const half=Math.floor(u.value/2);
-        u.value=half;
-        addUnit(u.x+40,u.y,u.player,half);
+    canvas.addEventListener("dblclick", (e) => {
+      if (gamePhase !== "placement") {
+        const {x, y} = getMouse(e);
+        const u = getUnitAt(x, y);
+        if (u && u.value >= 2 * UNIT_BASE * MIN_FRACTION) {
+          const half = Math.floor(u.value / 2);
+          u.value = half;
+          addUnit(u.x + 40, u.y, u.player, half);
+          draw();
+        }
       }
     });
 
-    function getMouse(e){
-      const rect=canvas.getBoundingClientRect();
-      return {x:e.clientX-rect.left,y:e.clientY-rect.top};
+    function getMouse(e) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
     }
 
-    function addUnit(x,y,player,value){
-      units.push({x,y,player,value,target:null,orderGiven:false,alive:true});
+    function addUnit(x, y, player, value) {
+      units.push({
+        x, y, player, value, 
+        target: null, 
+        orderGiven: false, 
+        alive: true,
+        damage: 0,
+        retreating: false
+      });
     }
-    function getUnitAt(x,y){
+
+    function getUnitAt(x, y) {
       return units.find(u =>
-        x>u.x-getSize(u)/2 && x<u.x+getSize(u)/2 &&
-        y>u.y-getSize(u)/2 && y<u.y+getSize(u)/2
+        x > u.x - getSize(u)/2 && x < u.x + getSize(u)/2 &&
+        y > u.y - getSize(u)/2 && y < u.y + getSize(u)/2
       );
     }
-    function getSize(u){ return UNIT_SIZE*Math.sqrt(u.value/UNIT_BASE); }
-    function distance(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
 
-    function animateBattle(){
-      let steps=30,step=0;
-      const anim=setInterval(()=>{
-        step++;
-        for (let u of units){
-          if (u.target){
-            let nx=u.x+u.target.dx/steps;
-            let ny=u.y+u.target.dy/steps;
-            if (!collidesEnemy(u,nx,ny)) {
-              u.x=nx; u.y=ny;
-            }
-          }
-        }
-        mergeOverlaps();
-        draw(true);
-        if (step>=steps){
-          clearInterval(anim);
-          executeBattle();
-          draw(true);
-        }
-      },40);
+    function getSize(u) { 
+      return UNIT_SIZE * Math.sqrt(u.value / UNIT_BASE); 
     }
 
-    function collidesEnemy(unit,nx,ny){
-      for (let v of units){
-        if (v!==unit && v.player!==unit.player){
-          if (Math.hypot(nx-v.x,ny-v.y)<(getSize(unit)+getSize(v))/2){
-            return true;
-          }
-        }
+    function distance(a, b) { 
+      return Math.hypot(a.x - b.x, a.y - b.y); 
+    }
+
+    function animateBattle() {
+      if (battleAnimation) {
+        clearInterval(battleAnimation);
       }
-      return false;
+      
+      battleAnimation = setInterval(() => {
+        let allFinished = true;
+        
+        // Движение на отрядите
+        for (let u of units) {
+          if (u.target && u.target.progress < 1) {
+            u.target.progress += 0.02; // Скорост на движение
+            
+            // Изчисляване на нова позиция
+            const progress = u.target.progress;
+            u.x = u.x + u.target.dx * 0.02;
+            u.y = u.y + u.target.dy * 0.02;
+            
+            allFinished = false;
+          }
+        }
+        
+        // Проверка за сблъсъци и сливане
+        mergeOverlaps();
+        
+        // Изпълнение на битката
+        executeBattle();
+        
+        // Проверка за край на битката
+        if (allFinished) {
+          clearInterval(battleAnimation);
+          battleAnimation = null;
+          gamePhase = "movementSetup";
+          currentPlayer = 1;
+          updateGameInfo();
+        }
+        
+        draw(true);
+      }, 40);
     }
 
-    function executeBattle(){
-      for (let u of units){ u.damage=0; }
-      for (let u of units){
-        const enemies=units.filter(v=>v.player!==u.player && distance(u,v)<MAX_MOVE);
-        if (enemies.length>0){
-          if (u.target){
-            const perEnemy=u.value/enemies.length;
-            for (let e of enemies){
-              let angToE=Math.atan2(e.y-u.y,e.x-u.x);
-              let diff=Math.abs(normalizeAngle(angToE-u.target.angle));
-              if (diff<=Math.PI/2){
-                e.damage+=perEnemy;
+    function executeBattle() {
+      // Нулиране на щетите
+      for (let u of units) { 
+        u.damage = 0; 
+      }
+      
+      // Изчисляване на щетите
+      for (let u of units) {
+        const enemies = units.filter(v => v.player !== u.player && distance(u, v) < MAX_MOVE);
+        if (enemies.length > 0) {
+          if (u.target) {
+            const perEnemy = u.value / enemies.length;
+            for (let e of enemies) {
+              let angToE = Math.atan2(e.y - u.y, e.x - u.x);
+              let diff = Math.abs(normalizeAngle(angToE - u.target.angle));
+              if (diff <= Math.PI / 2) {
+                e.damage += perEnemy * BATTLE_SPEED;
               }
             }
           } else {
-            const perEnemy=(u.value/10)/enemies.length;
-            for (let e of enemies){ e.damage+=perEnemy; }
+            const perEnemy = (u.value / 10) / enemies.length;
+            for (let e of enemies) { 
+              e.damage += perEnemy * BATTLE_SPEED; 
+            }
           }
         }
       }
 
-      for (let u of units){
-        let newValue=Math.max(u.value-u.damage,0);
-        u.targetValue=newValue;
-
-        if (u.damage>u.value){
-          // изчисляваме вектор на отстъпление
-          let vec={x:0,y:0};
-          for (let a of units.filter(v=>v.player!==u.player)){
-            let dx=u.x-a.x,dy=u.y-a.y;
-            let d=Math.hypot(dx,dy)||1;
-            vec.x+=dx/d*a.damage; vec.y+=dy/d*a.damage;
-          }
-          let retreatAng=Math.atan2(vec.y,vec.x);
-          if (u.target){
-            let diff=Math.abs(normalizeAngle(retreatAng-u.target.angle));
-            if (diff>Math.PI/2){
-              u.target.angle=retreatAng;
-              u.target.dx=Math.cos(retreatAng)*MAX_MOVE;
-              u.target.dy=Math.sin(retreatAng)*MAX_MOVE;
-              u.target.x=u.x+u.target.dx;
-              u.target.y=u.y+u.target.dy;
+      // Прилагане на щетите и определяне на отстъпления
+      for (let u of units) {
+        if (u.damage > 0) {
+          // Намаляване на стойността
+          u.value = Math.max(u.value - u.damage, 0);
+          
+          // Проверка за отстъпление
+          if (u.damage > u.value * 0.3) { // Ако щетите са над 30% от стойността
+            u.retreating = true;
+            
+            // Изчисляване на вектор на отстъпление
+            let vec = {x: 0, y: 0};
+            for (let a of units.filter(v => v.player !== u.player && distance(u, v) < MAX_MOVE)) {
+              let dx = u.x - a.x, dy = u.y - a.y;
+              let d = Math.hypot(dx, dy) || 1;
+              vec.x += dx/d * a.damage; 
+              vec.y += dy/d * a.damage;
             }
-          } else {
-            u.target={x:u.x+Math.cos(retreatAng)*50,
-                      y:u.y+Math.sin(retreatAng)*50,
-                      dx:Math.cos(retreatAng)*50,
-                      dy:Math.sin(retreatAng)*50,
-                      angle:retreatAng};
+            
+            let retreatAng = Math.atan2(vec.y, vec.x);
+            
+            if (u.target) {
+              let diff = Math.abs(normalizeAngle(retreatAng - u.target.angle));
+              if (diff > Math.PI / 2) {
+                // Промяна на посоката на движение за отстъпление
+                u.target.angle = retreatAng;
+                u.target.dx = Math.cos(retreatAng) * MAX_MOVE * 0.5;
+                u.target.dy = Math.sin(retreatAng) * MAX_MOVE * 0.5;
+                u.target.x = u.x + u.target.dx;
+                u.target.y = u.y + u.target.dy;
+              }
+            } else {
+              // Създаване на нова цел за отстъпление
+              u.target = {
+                x: u.x + Math.cos(retreatAng) * MAX_MOVE * 0.5,
+                y: u.y + Math.sin(retreatAng) * MAX_MOVE * 0.5,
+                dx: Math.cos(retreatAng) * MAX_MOVE * 0.5,
+                dy: Math.sin(retreatAng) * MAX_MOVE * 0.5,
+                angle: retreatAng,
+                distance: MAX_MOVE * 0.5,
+                progress: 0
+              };
+              u.orderGiven = true;
+            }
           }
         }
       }
-      animateDamage();
+      
+      // Премахване на слаби отряди
+      removeWeak();
     }
 
-    function animateDamage(){
-      let steps=300; // 10 пъти по-бавно
-      let step=0;
-      const anim=setInterval(()=>{
-        step++;
-        for (let u of units){
-          if (u.targetValue!==undefined){
-            u.value += (u.targetValue - u.value) / (steps - step + 1);
-          }
-        }
-        draw(true);
-        if (step>=steps){
-          clearInterval(anim);
-          for (let u of units){
-            if (u.targetValue!==undefined){
-              u.value=u.targetValue;
-              delete u.targetValue;
-            }
-          }
-          removeWeak();
-          draw(true);
-        }
-      },40);
-    }
-
-    function normalizeAngle(a){
-      while(a>Math.PI)a-=2*Math.PI;
-      while(a<-Math.PI)a+=2*Math.PI;
+    function normalizeAngle(a) {
+      while (a > Math.PI) a -= 2 * Math.PI;
+      while (a < -Math.PI) a += 2 * Math.PI;
       return a;
     }
 
-    function removeWeak(){
-      units=units.filter(u=>u.value>UNIT_BASE*MIN_FRACTION);
+    function removeWeak() {
+      units = units.filter(u => u.value > UNIT_BASE * MIN_FRACTION);
     }
-    function mergeOverlaps(){
-      for (let i=0;i<units.length;i++){
-        for (let j=i+1;j<units.length;j++){
-          let a=units[i],b=units[j];
-          if (a.player===b.player && distance(a,b)<(getSize(a)+getSize(b))/3){
-            a.value+=b.value;
-            units.splice(j,1);
+
+    function mergeOverlaps() {
+      for (let i = 0; i < units.length; i++) {
+        for (let j = i + 1; j < units.length; j++) {
+          let a = units[i], b = units[j];
+          if (a.player === b.player && distance(a, b) < (getSize(a) + getSize(b)) / 3) {
+            a.value += b.value;
+            // Прехвърляне на целта, ако единият отряд има цел
+            if (b.target && !a.target) {
+              a.target = b.target;
+              a.orderGiven = true;
+            }
+            units.splice(j, 1);
             j--;
           }
         }
       }
     }
 
-    function draw(hideArrows=false){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      for (let u of units){
-        ctx.fillStyle=u.player===1?"blue":"red";
-        const size=getSize(u);
-        ctx.save();
-        ctx.translate(u.x,u.y);
-        ctx.fillRect(-size/2,-size/2,size,size);
-        ctx.restore();
-        ctx.fillStyle="white";
-        ctx.font=`${10+u.value/20}px Arial`;
-        ctx.fillText(Math.round(u.value),u.x-10,u.y-5);
-        if (u.target && !hideArrows && gamePhase==="movementSetup" && u.player===currentPlayer){
-          ctx.strokeStyle="yellow";
-          ctx.beginPath();
-          ctx.moveTo(u.x,u.y);
-          ctx.lineTo(u.target.x,u.target.y);
-          ctx.stroke();
+    function draw(hideArrows = false) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Рисуване на разделителна линия
+      ctx.strokeStyle = "#444";
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      // Рисуване на отряди
+      for (let u of units) {
+        // Пропускаме скритите отряди по време на разполагане
+        if (gamePhase === "placement" && u.player !== currentPlayer) continue;
+        
+        ctx.fillStyle = u.player === 1 ? "blue" : "red";
+        if (u.retreating) {
+          ctx.fillStyle = u.player === 1 ? "#4444ff" : "#ff4444"; // По-светъл цвят при отстъпление
         }
+        
+        const size = getSize(u);
+        
+        // Рисуване на правоъгълник, обърнат в посока на движение
+        ctx.save();
+        ctx.translate(u.x, u.y);
+        
+        if (u.target && !hideArrows) {
+          ctx.rotate(u.target.angle + Math.PI / 2);
+        }
+        
+        ctx.fillRect(-size / 2, -size / 2, size, size);
+        ctx.restore();
+        
+        // Рисуване на стойността
+        ctx.fillStyle = "white";
+        const fontSize = Math.max(10, Math.min(20, 10 + u.value / 20));
+        ctx.font = `${fontSize}px Arial`;
+        ctx.textAlign = "center";
+        ctx.fillText(Math.round(u.value), u.x, u.y + 5);
+        
+        // Рисуване на стрелки за движение
+        if (u.target && !hideArrows && (gamePhase === "movementSetup" || gamePhase === "battle") && u.player === currentPlayer) {
+          ctx.strokeStyle = u.retreating ? "orange" : "yellow";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(u.x, u.y);
+          ctx.lineTo(u.target.x, u.target.y);
+          ctx.stroke();
+          
+          // Рисуване на върха на стрелката
+          const arrowSize = 10;
+          ctx.save();
+          ctx.translate(u.target.x, u.target.y);
+          ctx.rotate(u.target.angle);
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(-arrowSize, -arrowSize / 2);
+          ctx.lineTo(-arrowSize, arrowSize / 2);
+          ctx.closePath();
+          ctx.fillStyle = u.retreating ? "orange" : "yellow";
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+      
+      // Рисуване на избрания отряд
+      if (selectedUnit) {
+        ctx.strokeStyle = "cyan";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath();
+        ctx.arc(selectedUnit.x, selectedUnit.y, getSize(selectedUnit) / 2 + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
 
+    // Инициализация
     draw();
   </script>
 </body>
