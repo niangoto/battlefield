@@ -102,9 +102,12 @@
     const MIN_FRACTION = 1/20;
     const UNIT_BASE = 100;
     const UNIT_SIZE = 30;
-    const MIN_DISTANCE = 50; // Минимално разстояние между отряди при разполагане
-    const BATTLE_SPEED = 0.5; // Скорост на битката (0-1)
-    const RETREAT_DAMAGE_FACTOR = 0.2; // Фактор на щетите при отстъпление
+    const MIN_DISTANCE = 50;
+    const BATTLE_SPEED = 0.01;
+    const RETREAT_DAMAGE_FACTOR = 0.3;
+    const ATTACK_ANGLE = Math.PI / 3; // 60 градуса за атакуващ сектор
+    const MERGE_THRESHOLD = 0.5; // Праг за сливане (50% припокриване)
+    const RETREAT_ANGLE_THRESHOLD = Math.PI / 4; // 45 градуса разлика за отстъпление
 
     let gamePhase = "setup";
     let currentPlayer = 1;
@@ -174,6 +177,15 @@
         }
         
       } else if (gamePhase === "movementSetup") {
+        // Проверка дали всички отряди имат зададени команди
+        const playerUnits = units.filter(u => u.player === currentPlayer);
+        const unitsWithOrders = playerUnits.filter(u => u.orderGiven).length;
+        
+        if (unitsWithOrders < playerUnits.length) {
+          alert(`Играч ${currentPlayer} трябва да зададе посока на всички отряди преди да продължи!`);
+          return;
+        }
+        
         currentPlayer = currentPlayer === 1 ? 2 : 1;
         
         if (currentPlayer === 1) {
@@ -186,6 +198,7 @@
           u.target = null; 
           u.orderGiven = false; 
           u.damage = 0;
+          u.retreating = false;
           delete u.targetValue;
         }
         gamePhase = "movementSetup";
@@ -215,6 +228,10 @@
           break;
         case "battle":
           infoText = "Фаза: Битка | Изпълнява се битката";
+          // Показваме общата стойност на всеки играч
+          const p1Value = units.filter(u => u.player === 1).reduce((sum, u) => sum + u.value, 0);
+          const p2Value = units.filter(u => u.player === 2).reduce((sum, u) => sum + u.value, 0);
+          infoText += ` | Сини: ${Math.round(p1Value)} | Червени: ${Math.round(p2Value)}`;
           break;
       }
       
@@ -311,7 +328,8 @@
         orderGiven: false, 
         alive: true,
         damage: 0,
-        retreating: false
+        retreating: false,
+        angle: player === 1 ? Math.PI/2 : -Math.PI/2 // Начална ориентация към центъра
       });
     }
 
@@ -341,12 +359,31 @@
         // Движение на отрядите
         for (let u of units) {
           if (u.target && u.target.progress < 1) {
-            u.target.progress += 0.02; // Скорост на движение
+            u.target.progress += 0.01;
             
-            // Изчисляване на нова позиция
-            const progress = u.target.progress;
-            u.x = u.x + u.target.dx * 0.02;
-            u.y = u.y + u.target.dy * 0.02;
+            // Проверка за минимално разстояние преди движение
+            let canMove = true;
+            const newX = u.x + u.target.dx * 0.01;
+            const newY = u.y + u.target.dy * 0.01;
+            
+            for (let other of units) {
+              if (other !== u && other.player !== u.player) {
+                const newDist = Math.hypot(newX - other.x, newY - other.y);
+                const minDist = (getSize(u) + getSize(other)) / 2;
+                if (newDist < minDist) {
+                  canMove = false;
+                  break;
+                }
+              }
+            }
+            
+            if (canMove) {
+              u.x = newX;
+              u.y = newY;
+              u.angle = u.target.angle; // Запазваме посоката на движение
+            } else {
+              u.target.progress = 1; // Прекратяваме движението
+            }
             
             allFinished = false;
           }
@@ -377,23 +414,53 @@
         u.damage = 0; 
       }
       
-      // Изчисляване на щетите
+      // Изчисляване на щетите според линейния Ланчестър модел
       for (let u of units) {
-        const enemies = units.filter(v => v.player !== u.player && distance(u, v) < MAX_MOVE);
+        const attackRange = getSize(u);
+        const enemies = units.filter(v => v.player !== u.player && distance(u, v) < attackRange);
+        
         if (enemies.length > 0) {
+          // Намираме всички врагове в обсега
+          const totalEnemyValue = enemies.reduce((sum, e) => sum + e.value, 0);
+          
           if (u.target) {
-            const perEnemy = u.value / enemies.length;
-            for (let e of enemies) {
+            // Атакуваме само врагове в рамките на 60° от посоката на движение
+            const attackingEnemies = enemies.filter(e => {
               let angToE = Math.atan2(e.y - u.y, e.x - u.x);
               let diff = Math.abs(normalizeAngle(angToE - u.target.angle));
-              if (diff <= Math.PI / 2) {
-                e.damage += perEnemy * BATTLE_SPEED;
+              return diff <= ATTACK_ANGLE / 2;
+            });
+            
+            const nonAttackingEnemies = enemies.filter(e => {
+              let angToE = Math.atan2(e.y - u.y, e.x - u.x);
+              let diff = Math.abs(normalizeAngle(angToE - u.target.angle));
+              return diff > ATTACK_ANGLE / 2;
+            });
+            
+            // Изчисляваме общата стойност на атакуваните и неатакуваните врагове
+            const totalAttackedValue = attackingEnemies.reduce((sum, e) => sum + e.value, 0);
+            const totalNonAttackedValue = nonAttackingEnemies.reduce((sum, e) => sum + e.value, 0);
+            
+            // Прилагаме линейния Ланчестър модел - загубите са пропорционални на силата на противника
+            if (attackingEnemies.length > 0) {
+              for (let e of attackingEnemies) {
+                // Щетите са пропорционални на силата на атакуващия и на атакувания
+                const damage = (u.value * 0.9) * (e.value / totalAttackedValue) * BATTLE_SPEED;
+                e.damage += damage;
+              }
+            }
+            
+            if (nonAttackingEnemies.length > 0) {
+              for (let e of nonAttackingEnemies) {
+                const damage = (u.value * 0.1) * (e.value / totalNonAttackedValue) * BATTLE_SPEED;
+                e.damage += damage;
               }
             }
           } else {
-            const perEnemy = (u.value / 10) / enemies.length;
+            // Ако няма зададена посока, атакуваме всички с по-малка сила
             for (let e of enemies) { 
-              e.damage += perEnemy * BATTLE_SPEED; 
+              const damage = (u.value / 10) * (e.value / totalEnemyValue) * BATTLE_SPEED;
+              e.damage += damage; 
             }
           }
         }
@@ -402,33 +469,36 @@
       // Прилагане на щетите и определяне на отстъпления
       for (let u of units) {
         if (u.damage > 0) {
-          // Намаляване на стойността
+          // Намаляване на стойността според линейния Ланчестър модел
           u.value = Math.max(u.value - u.damage, 0);
           
           // Проверка за отстъпление
-          if (u.damage > u.value * 0.3) { // Ако щетите са над 30% от стойността
+          if (u.damage > u.value * RETREAT_DAMAGE_FACTOR) {
             u.retreating = true;
             
             // Изчисляване на вектор на отстъпление
             let vec = {x: 0, y: 0};
-            for (let a of units.filter(v => v.player !== u.player && distance(u, v) < MAX_MOVE)) {
+            const attackers = units.filter(v => v.player !== u.player && distance(u, v) < getSize(u));
+            
+            for (let a of attackers) {
               let dx = u.x - a.x, dy = u.y - a.y;
               let d = Math.hypot(dx, dy) || 1;
-              vec.x += dx/d * a.damage; 
-              vec.y += dy/d * a.damage;
+              vec.x += dx/d * a.value; 
+              vec.y += dy/d * a.value;
             }
             
             let retreatAng = Math.atan2(vec.y, vec.x);
             
             if (u.target) {
               let diff = Math.abs(normalizeAngle(retreatAng - u.target.angle));
-              if (diff > Math.PI / 2) {
+              if (diff > RETREAT_ANGLE_THRESHOLD) { // 45 градуса разлика
                 // Промяна на посоката на движение за отстъпление
                 u.target.angle = retreatAng;
                 u.target.dx = Math.cos(retreatAng) * MAX_MOVE * 0.5;
                 u.target.dy = Math.sin(retreatAng) * MAX_MOVE * 0.5;
                 u.target.x = u.x + u.target.dx;
                 u.target.y = u.y + u.target.dy;
+                u.target.progress = 0; // Започваме отново движението
               }
             } else {
               // Създаване на нова цел за отстъпление
@@ -465,15 +535,21 @@
       for (let i = 0; i < units.length; i++) {
         for (let j = i + 1; j < units.length; j++) {
           let a = units[i], b = units[j];
-          if (a.player === b.player && distance(a, b) < (getSize(a) + getSize(b)) / 3) {
-            a.value += b.value;
-            // Прехвърляне на целта, ако единият отряд има цел
-            if (b.target && !a.target) {
-              a.target = b.target;
-              a.orderGiven = true;
+          if (a.player === b.player) {
+            const dist = distance(a, b);
+            const minDist = (getSize(a) + getSize(b)) / 2;
+            
+            // Проверка за припокриване над 50%
+            if (dist < minDist * MERGE_THRESHOLD) {
+              a.value += b.value;
+              // Прехвърляне на целта, ако единият отряд има цел
+              if (b.target && !a.target) {
+                a.target = b.target;
+                a.orderGiven = true;
+              }
+              units.splice(j, 1);
+              j--;
             }
-            units.splice(j, 1);
-            j--;
           }
         }
       }
@@ -507,11 +583,12 @@
         ctx.save();
         ctx.translate(u.x, u.y);
         
-        if (u.target && !hideArrows) {
-          ctx.rotate(u.target.angle + Math.PI / 2);
-        }
+        // Използваме или посоката на целта, или текущата посока на отряда
+        const angle = u.target ? u.target.angle : u.angle;
+        ctx.rotate(angle + Math.PI / 2); // +90 градуса за вертикална ориентация
         
-        ctx.fillRect(-size / 2, -size / 2, size, size);
+        // Правоъгълник със съотношение 2:1 (дължина:широчина)
+        ctx.fillRect(-size / 2, -size / 4, size, size / 2);
         ctx.restore();
         
         // Рисуване на стойността
